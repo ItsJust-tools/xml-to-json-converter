@@ -38,7 +38,16 @@ vi.mock('@itsjust/core', () => ({
   ),
   useTool: () => ({
     state: {
-      data: { text: 'Hello' },
+      data: {
+        input: 'Hello',
+        output: '',
+        format: 'pretty',
+        stripDeclaration: true,
+        stripComments: true,
+        textAsValue: true,
+        error: null,
+        autoConvert: true,
+      },
       setData: mockSetData,
       isDirty: false,
       lastSaved: 'just now',
@@ -54,23 +63,36 @@ vi.mock('@itsjust/core', () => ({
 
 vi.mock('@/tool', () => ({
   toolConfig: {
-    id: 'simple-notepad',
-    name: 'Notepad',
+    id: 'xml-to-json-converter',
+    name: 'XML to JSON Converter',
     version: '1.0.0',
     features: { sidebar: true },
-    theme: { brand: 'Notepad' },
+    theme: { brand: 'XML to JSON Converter' },
   },
   templateBaseVersion: '1.1.0',
-  ToolCanvas: ({ text }: { text: string }) => <div>canvas:{text}</div>,
+  ToolCanvas: ({ state }: { state: { input?: string } }) => <div>canvas:{state.input}</div>,
   ToolToolbar: () => <div>toolbar</div>,
-  ToolSidebar: ({ text }: { text: string }) => <div>sidebar:{text}</div>,
+  ToolSidebar: ({ state }: { state: { input?: string } }) => <div>sidebar:{state.input}</div>,
+  xmlToJsonTool: {
+    serialize: (state: unknown) => JSON.stringify(state),
+    deserialize: () => ({
+      success: true,
+      data: {
+        input: 'From Shared Url',
+        output: '',
+        format: 'pretty',
+        stripDeclaration: true,
+        stripComments: true,
+        textAsValue: true,
+        error: null,
+        autoConvert: true,
+      },
+    }),
+  },
 }));
 
-vi.mock('@/tool/notepad-state', () => ({
-  notepadTool: {
-    serialize: (state: unknown) => JSON.stringify(state),
-    deserialize: () => ({ success: true, data: { content: 'From Shared Url', title: '' } }),
-  },
+vi.mock('@/tool/tool-definition', () => ({
+  convert: (state: unknown) => state,
 }));
 
 describe('app client and help page', () => {

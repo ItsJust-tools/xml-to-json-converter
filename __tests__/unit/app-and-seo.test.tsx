@@ -16,6 +16,8 @@ import { notepadTool } from '@/tool/notepad-state';
 import { ToolCanvas } from '@/tool/components/tool-canvas';
 import { ToolSidebar } from '@/tool/components/tool-sidebar';
 import { ToolToolbar } from '@/tool/components/tool-toolbar';
+import { xmlToJsonTool } from '@/tool/tool-definition';
+import type { ToolState } from '@/tool/types';
 import type { ExporterLoader } from '@itsjust/core';
 
 vi.mock('next/link', () => ({
@@ -96,16 +98,8 @@ describe('app and seo', () => {
       success: true,
       data: { content: 'x', title: '' },
     });
-    expect(notepadTool.deserialize({ nope: true })).toEqual({
-      success: false,
-      error: 'Invalid data format: expected { content: string, title?: string }',
-    });
-    expect(notepadTool.serialize({ content: 'x' })).toContain('"content": "x"');
-    expect(notepadTool.deserialize({ content: 'x', title: 'My Note' })).toEqual({
-      success: true,
-      data: { content: 'x', title: 'My Note' },
-    });
-    const exporters = (notepadTool as { exporters?: Array<{ loader: ExporterLoader }> }).exporters ?? [];
+    const exporters =
+      (notepadTool as { exporters?: Array<{ loader: ExporterLoader }> }).exporters ?? [];
     expect(exporters).toHaveLength(4);
     const first = exporters[0];
     expect(first).toBeDefined();
@@ -116,16 +110,43 @@ describe('app and seo', () => {
   });
 
   it('renders tool components', () => {
+    const state: ToolState = { ...xmlToJsonTool.initialState, input: 'Hello world' };
+    const noHandlers = {
+      onFormatChange: () => {},
+      onStripDeclarationChange: () => {},
+      onStripCommentsChange: () => {},
+      onTextAsValueChange: () => {},
+      onAutoConvertChange: () => {},
+      onPresetSelect: () => {},
+    };
     render(
       <>
-        <ToolToolbar />
-        <ToolSidebar text="Hello world" fontSize={16} onFontSizeChange={() => {}} />
-        <ToolCanvas text="" fontSize={16} />
+        <ToolToolbar onClear={() => {}} onCopyOutput={() => {}} onReset={() => {}} />
+        <ToolSidebar state={state} {...noHandlers} />
+        <ToolCanvas state={state} onInputChange={() => {}} onCopyOutput={() => {}} />
       </>
     );
 
+    expect(screen.getByRole('button', { name: 'Clear XML input' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy JSON to clipboard' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Reset to sample XML and defaults' })
+    ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open help page' })).toBeInTheDocument();
-    expect(screen.getByText('11')).toBeInTheDocument(); // char count for "Hello world"
-    expect(screen.getByRole('application', { name: 'Notepad canvas' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load sample XML: Bookstore' })).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/JSON output/).length).toBeGreaterThan(0);
+    expect(screen.getByDisplayValue('Hello world')).toBeInTheDocument();
+  });
+
+  it('covers notepad helper exports', () => {
+    expect(notepadTool.deserialize({ content: 'x' })).toEqual({
+      success: true,
+      data: { content: 'x', title: '' },
+    });
+    expect(notepadTool.deserialize({ nope: true })).toEqual({
+      success: false,
+      error: 'Invalid data format: expected { content: string, title?: string }',
+    });
+    expect(notepadTool.serialize({ content: 'x' })).toContain('"content": "x"');
   });
 });

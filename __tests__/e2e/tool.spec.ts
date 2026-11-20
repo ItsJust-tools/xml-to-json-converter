@@ -19,62 +19,95 @@ async function ensureToolbarInteractable(page: import('@playwright/test').Page) 
   }
 }
 
-async function typeInNotepad(page: import('@playwright/test').Page, text: string) {
+const SAMPLE_XML = '<person id="1"><name>Alice</name><age>30</age></person>';
+
+async function typeXml(page: import('@playwright/test').Page, xml: string) {
   await ensureToolbarInteractable(page);
-  const textarea = page.locator('.notepad-textarea');
-  await textarea.fill(text);
+  const textarea = page.locator('.converter-textarea.xml-input');
+  await textarea.fill(xml);
 }
 
 test('tool loads with correct title', async ({ page }) => {
   await page.goto('/');
   const title = await page.title();
-  expect(title).toContain('Notepad');
+  expect(title).toContain('XML to JSON');
 });
 
-test('textarea is editable', async ({ page }) => {
+test('converts simple XML to correct JSON structure', async ({ page }) => {
   await page.goto('/');
-  const textarea = page.locator('.notepad-textarea');
-  await textarea.fill('Hello Notepad');
-  await expect(textarea).toHaveValue('Hello Notepad');
+  await typeXml(page, SAMPLE_XML);
+  const output = page.locator('.converter-textarea.json-output');
+  await expect(output).toHaveValue(/\{[\s\S]*"person"[\s\S]*"name": "Alice"/);
 });
 
-test('undo/redo buttons enable/disable correctly', async ({ page }, testInfo) => {
+test('repeated sibling elements are grouped into arrays', async ({ page }) => {
+  await page.goto('/');
+  await typeXml(page, '<items><item>a</item><item>b</item></items>');
+  const output = page.locator('.converter-textarea.json-output');
+  await expect(output).toHaveValue(/"item": \[\s*"a",\s*"b"/);
+});
+
+test('attributes are prefixed as @ keys', async ({ page }) => {
+  await page.goto('/');
+  await typeXml(page, '<book id="7"><title>T</title></book>');
+  const output = page.locator('.converter-textarea.json-output');
+  await expect(output).toHaveValue(/"@id": "7"/);
+});
+
+test('malformed XML shows a clear error message', async ({ page }) => {
+  await page.goto('/');
+  await typeXml(page, '<root><unclosed>');
+  const error = page.locator('.converter-error');
+  await expect(error).toBeVisible();
+  await expect(error).toContainText(/Invalid XML/i);
+});
+
+test('pretty and minified output toggles work', async ({ page }) => {
+  await page.goto('/');
+  await typeXml(page, SAMPLE_XML);
+  const output = page.locator('.converter-textarea.json-output');
+  await expect(output).toHaveValue(/\n/);
+
+  await ensureToolbarInteractable(page);
+  await page.getByRole('button', { name: 'Minified' }).click();
+  await expect(output).toHaveValue(/\{"person":\{"@id":"1","name":"Alice","age":"30"\}\}/);
+
+  await page.getByRole('button', { name: 'Pretty' }).click();
+  await expect(output).toHaveValue(/\n/);
+});
+
+test('empty input keeps output empty without error', async ({ page }) => {
+  await page.goto('/');
+  await typeXml(page, '');
+  const output = page.locator('.converter-textarea.json-output');
+  await expect(output).toHaveValue('');
+});
+
+test('sample XML presets load', async ({ page }) => {
   await page.goto('/');
   await ensureToolbarInteractable(page);
+  await page.getByRole('button', { name: 'Load sample XML: Bookstore' }).click();
+  const textarea = page.locator('.converter-textarea.xml-input');
+  await expect(textarea).toHaveValue(/<bookstore>/);
+});
 
-  const undoButton = page.getByRole('button', { name: 'Undo (Ctrl+Z)' });
-  const redoButton = page.getByRole('button', { name: 'Redo (Ctrl+Y)' });
-  await expect(undoButton).toBeDisabled();
-  await expect(redoButton).toBeDisabled();
+test('clear and reset controls work', async ({ page }) => {
+  await page.goto('/');
+  await typeXml(page, SAMPLE_XML);
+  await page.getByRole('button', { name: 'Clear XML input' }).click();
+  await expect(page.locator('.converter-textarea.xml-input')).toHaveValue('');
+  await page.getByRole('button', { name: 'Reset to sample XML and defaults' }).click();
+  await expect(page.locator('.converter-textarea.xml-input')).toHaveValue(/<bookstore>/);
+});
 
-  if (testInfo.project.name.includes('Mobile')) {
-    const fileInput = page.locator('input[type="file"]');
-    await fileInput.evaluate((el: HTMLInputElement) => {
-      el.style.display = 'block';
-      el.style.visibility = 'visible';
-    });
-    await fileInput.setInputFiles({
-      name: 'undo-mobile.json',
-      mimeType: 'application/json',
-      buffer: Buffer.from(JSON.stringify({ text: 'undo mobile', fontSize: 16 })),
-    });
-  } else {
-    await typeInNotepad(page, 'hello world');
-  }
-
-  await expect(undoButton).toBeEnabled();
-  await expect(redoButton).toBeDisabled();
-
-  if (testInfo.project.name.includes('Mobile')) {
-    await expect(undoButton).toBeVisible();
-    return;
-  }
-
-  await undoButton.click({ force: true });
-  await expect(redoButton).toBeEnabled();
-
-  await redoButton.click({ force: true });
-  await expect(redoButton).toBeDisabled();
+test('copy JSON button works', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name.includes('Mobile'), 'clipboard requires desktop permissions');
+  await page.goto('/');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await typeXml(page, SAMPLE_XML);
+  await page.getByRole('button', { name: 'Copy JSON output' }).click();
+  const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clipboard).toContain('"person"');
 });
 
 test('export dropdown opens and shows JSON format', async ({ page }, testInfo) => {
@@ -193,40 +226,6 @@ test('keyboard shortcuts overlay opens and closes', async ({ page, browserName }
   await expect(page.getByRole('dialog')).not.toBeVisible();
 });
 
-test('undo/redo via keyboard shortcuts', async ({ page }, testInfo) => {
-  await page.addInitScript(() => {
-    localStorage.clear();
-  });
-  await page.goto('/');
-  await ensureToolbarInteractable(page);
-  if (testInfo.project.name.includes('Mobile')) {
-    const fileInput = page.locator('input[type="file"]');
-    await fileInput.evaluate((el: HTMLInputElement) => {
-      el.style.display = 'block';
-      el.style.visibility = 'visible';
-    });
-    await fileInput.setInputFiles({
-      name: 'keyboard-mobile.json',
-      mimeType: 'application/json',
-      buffer: Buffer.from(JSON.stringify({ text: 'keyboard mobile' })),
-    });
-  } else {
-    await typeInNotepad(page, 'keyboard test');
-  }
-
-  const undoButton = page.getByRole('button', { name: 'Undo (Ctrl+Z)' });
-  await expect(undoButton).toBeEnabled();
-
-  const redoButton = page.getByRole('button', { name: 'Redo (Ctrl+Y)' });
-  await expect(redoButton).toBeDisabled();
-
-  await page.locator('body').press('Control+z');
-  await expect(redoButton).toBeEnabled();
-
-  await page.locator('body').press('Control+Shift+z');
-  await expect(undoButton).toBeEnabled();
-});
-
 test('mobile sidebar backdrop closes sidebar', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 });
   await page.goto('/');
@@ -245,7 +244,17 @@ test('import from json file works', async ({ page }) => {
   await page.goto('/');
   await ensureToolbarInteractable(page);
 
-  const fileContent = JSON.stringify({ text: 'Imported Note' });
+  const importedState = {
+    input: 'Imported XML',
+    output: '',
+    format: 'pretty',
+    stripDeclaration: true,
+    stripComments: true,
+    textAsValue: true,
+    error: null,
+    autoConvert: false,
+  };
+  const fileContent = JSON.stringify(importedState);
 
   const fileInput = page.locator('input[type="file"]');
   await fileInput.evaluate((el: HTMLInputElement) => {
@@ -259,8 +268,8 @@ test('import from json file works', async ({ page }) => {
   });
 
   await expect
-    .poll(() => page.locator('.notepad-textarea').inputValue())
-    .toContain('Imported Note');
+    .poll(() => page.locator('.converter-textarea.xml-input').inputValue())
+    .toContain('Imported XML');
 });
 
 test('export json download triggers', async ({ page }) => {
@@ -369,21 +378,3 @@ test('visual regression — default view', async ({ page, browserName }) => {
   await page.waitForSelector('.tool-shell-canvas');
   await expect(page.locator('.tool-shell')).toBeVisible();
 });
-
-// test('visual regression — dark mode', async ({ page }) => {
-//   await page.goto('/');
-//   await page.waitForSelector('.tool-shell-canvas');
-//   const themeButton = page.getByRole('button', { name: /Switch to dark mode/i });
-//   if (await themeButton.isVisible()) {
-//     await themeButton.click();
-//     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-//     await expect(page).toHaveScreenshot('tool-dark.png', { maxDiffPixels: 100 });
-//   }
-// });
-
-// test('visual regression — mobile view', async ({ page }) => {
-//   await page.setViewportSize({ width: 375, height: 667 });
-//   await page.goto('/');
-//   await page.waitForSelector('.tool-shell-canvas');
-//   await expect(page).toHaveScreenshot('tool-mobile.png', { maxDiffPixels: 100 });
-// });

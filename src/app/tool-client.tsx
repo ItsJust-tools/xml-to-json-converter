@@ -17,12 +17,10 @@ import {
   ToolCanvas,
   ToolToolbar,
   ToolSidebar,
+  xmlToJsonTool,
 } from '@/tool';
-import { notepadTool as notepadToolDef, type NotepadState } from '@/tool/notepad-state';
-
-const DEFAULT_FONT_SIZE = 16;
-const MIN_FONT_SIZE = 8;
-const MAX_FONT_SIZE = 72;
+import { convert } from '@/tool/tool-definition';
+import type { ToolState } from '@/tool/types';
 
 export default function ToolClient() {
   const ToolShellCompat = ToolShell as unknown as ComponentType<Record<string, unknown>> & {
@@ -33,7 +31,7 @@ export default function ToolClient() {
     StatusBar?: ComponentType<{ children?: ReactNode }>;
   };
   const canvasRef = useRef<HTMLDivElement>(null);
-  const tool = useTool<NotepadState>(notepadToolDef, canvasRef);
+  const tool = useTool<ToolState>(xmlToJsonTool, canvasRef);
   const setToolData = tool.state.setData;
   const showToast = tool.toast;
   const [isSharing, setIsSharing] = useState(false);
@@ -41,24 +39,85 @@ export default function ToolClient() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(
     () => typeof window !== 'undefined' && window.innerWidth > 768 && toolConfig.features.sidebar
   );
-  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const state = tool.state.data;
 
-  const title = tool.state.data.title?.trim() || toolConfig.name;
+  const title = toolConfig.name;
 
   useEffect(() => {
     document.title = title;
   }, [title]);
 
-  const handleTextChange = useCallback(
-    (text: string) => {
-      setToolData((prev) => ({ ...prev, content: text }));
+  // Live conversion: recompute output whenever relevant state changes
+  useEffect(() => {
+    if (!state.autoConvert) return;
+    if (state.output && state.error === null && !state.input.trim()) return;
+    const next = convert(state);
+    if (next.output !== state.output || next.error !== state.error) {
+      setToolData((prev) => {
+        const converted = convert(prev);
+        if (converted.output === prev.output && converted.error === prev.error) return prev;
+        return converted;
+      });
+    }
+  }, [state, setToolData]);
+
+  const patch = useCallback(
+    (updater: (prev: ToolState) => ToolState) => {
+      setToolData((prev) => {
+        const next = updater(prev);
+        return next.autoConvert ? convert(next) : next;
+      });
     },
     [setToolData]
   );
 
-  const handleFontSizeChange = useCallback((delta: number) => {
-    setFontSize((prev) => Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, prev + delta)));
-  }, []);
+  const handleInputChange = useCallback(
+    (xml: string) => {
+      patch((prev) => ({ ...prev, input: xml }));
+    },
+    [patch]
+  );
+
+  const handleFormatChange = useCallback(
+    (format: ToolState['format']) => {
+      patch((prev) => ({ ...prev, format }));
+    },
+    [patch]
+  );
+
+  const handleOptionChange = useCallback(
+    (key: 'stripDeclaration' | 'stripComments' | 'textAsValue' | 'autoConvert', value: boolean) => {
+      patch((prev) => ({ ...prev, [key]: value }));
+    },
+    [patch]
+  );
+
+  const handlePresetSelect = useCallback(
+    (xml: string) => {
+      patch((prev) => ({ ...prev, input: xml }));
+      showToast(`Loaded sample XML`, 'success');
+    },
+    [patch, showToast]
+  );
+
+  const handleClear = useCallback(() => {
+    patch((prev) => ({ ...prev, input: '' }));
+  }, [patch]);
+
+  const handleReset = useCallback(() => {
+    setToolData({ ...xmlToJsonTool.initialState });
+    showToast('Reset to default sample', 'success');
+  }, [setToolData, showToast]);
+
+  const handleCopyOutput = useCallback(async () => {
+    if (!state.output) return;
+    try {
+      await navigator.clipboard.writeText(state.output);
+      showToast('JSON copied to clipboard', 'success');
+    } catch {
+      showToast('Failed to copy JSON', 'error');
+    }
+  }, [state.output, showToast]);
 
   useEffect(() => {
     if (hasLoadedSharedState.current) return;
@@ -70,9 +129,10 @@ export default function ToolClient() {
       const serialized = decompressFromEncodedURIComponent(encodedState);
       if (!serialized) throw new Error('Invalid shared URL');
       const parsed: unknown = JSON.parse(serialized);
-      const deserialized = notepadToolDef.deserialize(parsed);
+      const deserialized = xmlToJsonTool.deserialize(parsed);
       if (!deserialized.success) throw new Error(deserialized.error);
-      setToolData(deserialized.data);
+      const restored = convert(deserialized.data);
+      setToolData(restored);
       showToast('Loaded state from shared URL', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load shared URL';
@@ -83,7 +143,7 @@ export default function ToolClient() {
   const handleShare = useCallback(async () => {
     setIsSharing(true);
     try {
-      const serialized = notepadToolDef.serialize(tool.state.data);
+      const serialized = xmlToJsonTool.serialize(tool.state.data);
       const encodedState = compressToEncodedURIComponent(serialized);
       if (!encodedState) throw new Error('Failed to encode state for URL');
       const url = new URL(window.location.href);
@@ -113,7 +173,7 @@ export default function ToolClient() {
 
   const toolbarContent = (
     <>
-      <ToolToolbar />
+      <ToolToolbar onClear={handleClear} onCopyOutput={handleCopyOutput} onReset={handleReset} />
       <ImportExport
         formats={tool.supportedFormats}
         onExport={tool.handleExport}
@@ -126,15 +186,23 @@ export default function ToolClient() {
   );
 
   const sidebarContent = (
-    <ToolSidebar text={tool.state.data.content} fontSize={fontSize} onFontSizeChange={handleFontSizeChange} />
+    <ToolSidebar
+      state={state}
+      onFormatChange={handleFormatChange}
+      onStripDeclarationChange={(v) => handleOptionChange('stripDeclaration', v)}
+      onStripCommentsChange={(v) => handleOptionChange('stripComments', v)}
+      onTextAsValueChange={(v) => handleOptionChange('textAsValue', v)}
+      onAutoConvertChange={(v) => handleOptionChange('autoConvert', v)}
+      onPresetSelect={handlePresetSelect}
+    />
   );
 
   const canvasContent = (
     <ToolCanvas
       canvasRef={canvasRef}
-      text={tool.state.data.content}
-      fontSize={fontSize}
-      onChange={handleTextChange}
+      state={state}
+      onInputChange={handleInputChange}
+      onCopyOutput={handleCopyOutput}
     />
   );
 
@@ -154,7 +222,7 @@ export default function ToolClient() {
           'Ready'
         )}
       </span>
-      <span className="status-slot status-slot-font-size">{fontSize}px</span>
+      <span className="status-slot status-slot-format">{state.format}</span>
       <span className="status-slot status-slot-tool-version">Tool v{toolConfig.version}</span>
       <span className="status-slot status-slot-template-version">
         Template v{templateBaseVersion}
