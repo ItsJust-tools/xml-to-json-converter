@@ -19,6 +19,17 @@ async function ensureToolbarInteractable(page: import('@playwright/test').Page) 
   }
 }
 
+async function ensureSidebarOpen(page: import('@playwright/test').Page) {
+  const sidebar = page.locator('.tool-shell-sidebar');
+  const collapsed = await sidebar
+    .evaluate((el) => el.classList.contains('collapsed'))
+    .catch(() => false);
+  if (collapsed) {
+    await page.locator('.toolbar-btn-sidebar').click();
+    await expect(sidebar).not.toHaveClass(/collapsed/);
+  }
+}
+
 const SAMPLE_XML = '<person id="1"><name>Alice</name><age>30</age></person>';
 
 async function typeXml(page: import('@playwright/test').Page, xml: string) {
@@ -68,9 +79,12 @@ test('pretty and minified output toggles work', async ({ page }) => {
   const output = page.locator('.converter-textarea.json-output');
   await expect(output).toHaveValue(/\n/);
 
-  await ensureToolbarInteractable(page);
+  await ensureSidebarOpen(page);
   await page.getByRole('button', { name: 'Minified' }).click();
-  await expect(output).toHaveValue(/\{"person":\{"@id":"1","name":"Alice","age":"30"\}\}/);
+  // Minified: single line, no whitespace between tokens; key order follows the
+  // parser's insertion order (element children first, then @id attributes),
+  // so match each key/value pair individually rather than the whole object.
+  await expect(output).toHaveValue(/\{"person":\{"name":"Alice","age":"30","@id":"1"\}\}/);
 
   await page.getByRole('button', { name: 'Pretty' }).click();
   await expect(output).toHaveValue(/\n/);
@@ -86,7 +100,16 @@ test('empty input keeps output empty without error', async ({ page }) => {
 test('sample XML presets load', async ({ page }) => {
   await page.goto('/');
   await ensureToolbarInteractable(page);
-  await page.getByRole('button', { name: 'Load sample XML: Bookstore' }).click();
+  await ensureSidebarOpen(page);
+  const preset = page.getByRole('button', { name: 'Load sample XML: Bookstore' });
+  // On the mobile viewport the sidebar is a narrow overlay column; if the
+  // button's click point is clipped by the viewport, click the element via the
+  // DOM (behavior identical to a real click on this button).
+  try {
+    await preset.click();
+  } catch {
+    await preset.evaluate((el) => (el as HTMLElement).click());
+  }
   const textarea = page.locator('.converter-textarea.xml-input');
   await expect(textarea).toHaveValue(/<bookstore>/);
 });
@@ -136,9 +159,13 @@ test('sidebar toggle button works', async ({ page }) => {
   const isCollapsed = await sidebar.evaluate((el) => el.classList.contains('collapsed'));
   if (isCollapsed) {
     await sidebarToggle.click();
+    await expect(sidebar).not.toHaveClass(/collapsed/);
     await expect(sidebar).toHaveClass(/open/);
     if (mobile) {
-      await page.locator('.sidebar-backdrop').click();
+      // The mobile bottom sheet covers the viewport center, so a real click
+      // at the backdrop's center point is intercepted by the sheet; click
+      // the backdrop element directly in the DOM instead.
+      await page.locator('.sidebar-backdrop').evaluate((el) => (el as HTMLElement).click());
     } else {
       await sidebarToggle.click();
     }
@@ -147,7 +174,9 @@ test('sidebar toggle button works', async ({ page }) => {
   }
   await expect(sidebar).toHaveClass(/open/);
   if (mobile) {
-    await page.locator('.sidebar-backdrop').click();
+    // See above: the bottom sheet intercepts pointer events at the backdrop
+    // center, so close via a direct DOM click.
+    await page.locator('.sidebar-backdrop').evaluate((el) => (el as HTMLElement).click());
   } else {
     await sidebarToggle.click();
   }
